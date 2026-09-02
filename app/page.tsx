@@ -62,6 +62,7 @@ type Research = {
   commercialSignals?: string[]
   recommendedAction?: string
   competitiveMetrics?: { metric: string; prospect: string; competitors: string[] }[]
+  analyzedAt?: number
 }
 
 const steps = ['Researching company', 'Finding competitors', 'Comparing SEO visibility', 'Detecting competitor leakage', 'Detecting conversion leakage', 'Estimating opportunity', 'Scoring prospect', 'Generating outreach']
@@ -235,6 +236,7 @@ function toResearch(raw: Record<string, unknown>): Research {
     commercialSignals: Array.isArray(raw.commercialSignals) ? raw.commercialSignals.map(String) : undefined,
     recommendedAction: raw.recommendedAction ? String(raw.recommendedAction) : undefined,
     competitiveMetrics: competitiveMetrics.length > 0 ? competitiveMetrics : undefined,
+    analyzedAt: Date.now(),
   }
 }
 
@@ -254,6 +256,32 @@ function applyAnalysis(prospect: Prospect, raw: Record<string, unknown>): Prospe
     competitors: Array.isArray(raw.competitors) ? raw.competitors.map(String) : prospect.competitors,
     research,
   }
+}
+
+function sanitizeProspect(prospect: Prospect): Prospect {
+  if (hasLiveResearch(prospect)) return prospect
+  const { research, ...rest } = prospect
+  return {
+    ...rest,
+    stage: rest.stage === 'Sequence Ready' || rest.stage === 'Researching' ? 'Discovered' : rest.stage,
+  }
+}
+
+function stripProspectForStorage(prospect: Prospect): Prospect {
+  const { research, ...rest } = prospect
+  return {
+    ...rest,
+    stage: rest.stage === 'Sequence Ready' || rest.stage === 'Researching' ? 'Discovered' : rest.stage,
+  }
+}
+
+function hasLiveResearch(prospect: Prospect) {
+  const research = prospect.research
+  return Boolean(
+    research?.analyzedAt &&
+      research.emails.length >= 4 &&
+      research.emails.every(email => email.subject && email.body),
+  )
 }
 
 function priorityLabel(score: number) {
@@ -319,17 +347,19 @@ export default function Page() {
       }
     }
 
-    const saved = window.localStorage.getItem('trevor-discovered-prospects')
+    window.localStorage.removeItem('trevor-discovered-prospects')
+
+    const saved = window.localStorage.getItem('trevor-discovered-prospects-v2')
     if (!saved) return
     try {
       const parsed = JSON.parse(saved) as Prospect[]
       if (parsed.length > 0) {
-        setProspects(parsed)
+        setProspects(parsed.map(p => sanitizeProspect(stripProspectForStorage(p))))
         setHasSearched(true)
         setCriteria(true)
       }
     } catch {
-      window.localStorage.removeItem('trevor-discovered-prospects')
+      window.localStorage.removeItem('trevor-discovered-prospects-v2')
     }
   }, [])
   useEffect(() => {
@@ -337,17 +367,21 @@ export default function Page() {
   }, [priorities])
   useEffect(() => {
     if (prospects.length > 0) {
-      window.localStorage.setItem('trevor-discovered-prospects', JSON.stringify(prospects))
+      window.localStorage.setItem(
+        'trevor-discovered-prospects-v2',
+        JSON.stringify(prospects.map(stripProspectForStorage)),
+      )
     }
   }, [prospects])
 
   const run = async (p: Prospect) => {
-    setSelected(p)
+    const fresh = { ...p, stage: 'Researching' as Stage, research: undefined }
+    setSelected(fresh)
     setTab('overview')
     setRunning(true)
     setStep(0)
     setApiNote('')
-    setProspects(all => all.map(x => (x.id === p.id ? { ...x, stage: 'Researching' } : x)))
+    setProspects(all => all.map(x => (x.id === p.id ? fresh : x)))
 
     const stepTimer = setInterval(() => {
       setStep(current => (current < steps.length - 1 ? current + 1 : current))
@@ -372,13 +406,15 @@ export default function Page() {
         setApiNote('')
       } else {
         setApiNote('')
-        setProspects(all => all.map(x => (x.id === p.id ? { ...x, stage: 'Analyzed' } : x)))
-        setSelected({ ...p, stage: 'Analyzed' })
+        const failed = { ...p, stage: 'Analyzed' as Stage, research: undefined }
+        setProspects(all => all.map(x => (x.id === p.id ? failed : x)))
+        setSelected(failed)
       }
     } catch {
       setApiNote('')
-      setProspects(all => all.map(x => (x.id === p.id ? { ...x, stage: 'Analyzed' } : x)))
-      setSelected({ ...p, stage: 'Analyzed' })
+      const failed = { ...p, stage: 'Analyzed' as Stage, research: undefined }
+      setProspects(all => all.map(x => (x.id === p.id ? failed : x)))
+      setSelected(failed)
     } finally {
       clearInterval(stepTimer)
       setRunning(false)
@@ -444,17 +480,25 @@ export default function Page() {
     }
   }
 
+  const openProspect = (prospect: Prospect) => setSelected(sanitizeProspect(prospect))
+
+  useEffect(() => {
+    setProspects(all => all.map(sanitizeProspect))
+    setSelected(current => (current ? sanitizeProspect(current) : null))
+  }, [])
+
   const activeProspects = useMemo(() => [...prospects].sort((a, b) => b.score - a.score), [prospects])
 
   if (selected) {
+    const prospect = sanitizeProspect(selected)
     return (
       <Detail
-        prospect={selected}
+        prospect={prospect}
         tab={tab}
         setTab={setTab}
         running={running}
         step={step}
-        run={() => run(selected)}
+        run={() => run(prospect)}
         sequence={sequence}
         setSequence={setSequence}
         back={() => setSelected(null)}
@@ -507,11 +551,11 @@ export default function Page() {
             resultsRef={resultsRef}
             priorities={priorities}
             setPriorities={setPriorities}
-            onOpen={setSelected}
+            onOpen={openProspect}
           />
         )}
-        {view === 'prospects' && <ProspectsView prospects={activeProspects} onOpen={setSelected} onRun={run} />}
-        {view === 'campaigns' && <Campaigns sequence={sequence} prospects={prospects} onOpen={setSelected} />}
+        {view === 'prospects' && <ProspectsView prospects={activeProspects} onOpen={openProspect} onRun={run} />}
+        {view === 'campaigns' && <Campaigns sequence={sequence} prospects={prospects} onOpen={openProspect} />}
       </main>
     </div>
   )
@@ -1032,7 +1076,7 @@ function Detail({
 }) {
   const [expanded, setExpanded] = useState(0)
   const data = prospect.research
-  const hasResearch = Boolean(data)
+  const hasResearch = hasLiveResearch(prospect)
 
   return (
     <div className="mesh-bg min-h-screen text-foreground">
@@ -1101,8 +1145,9 @@ function Detail({
             {tab === 'overview' && <Overview prospect={prospect} data={data} setTab={setTab} />}
             {tab === 'competitive' && <Competitive prospect={prospect} data={data} />}
             {tab === 'leakage' && <Leakage data={data} prospect={prospect} />}
-            {tab === 'outreach' && (
+            {tab === 'outreach' && data && (
               <Outreach
+                prospect={prospect}
                 data={data}
                 expanded={expanded}
                 setExpanded={setExpanded}
@@ -1357,18 +1402,22 @@ function Leakage({ data, prospect }: { data: Research; prospect: Prospect }) {
 }
 
 function Outreach({
+  prospect,
   data,
   expanded,
   setExpanded,
   active,
   launch,
 }: {
+  prospect: Prospect
   data: Research
   expanded: number
   setExpanded: (i: number) => void
   active: boolean
   launch: () => void
 }) {
+  const ready = hasLiveResearch({ ...prospect, research: data })
+
   return (
     <div className="animate-fade-up grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
       <section className="glass-card rounded-2xl p-6">
@@ -1381,18 +1430,22 @@ function Outreach({
         <Info title="Buyer persona" value={data.decisionMakers?.slice(0, 2).join(' or ') || 'Decision maker'} />
         <Info title="Tone" value="Specific, evidence-led, concise" />
         <Info title="CTA" value={data.recommendedAction || '15-minute competitor leakage walkthrough'} />
-        {active ? (
-          <div className="mt-6 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-xs text-emerald-400">
-            <Check size={14} className="mb-1.5" />
-            Sequence active
-            <br />
-            <span className="text-emerald-400/60">Day 1 sent · Day 3 scheduled · Day 7 scheduled · Day 12 scheduled</span>
-          </div>
+        {ready ? (
+          active ? (
+            <div className="mt-6 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-xs text-emerald-400">
+              <Check size={14} className="mb-1.5" />
+              Sequence active
+              <br />
+              <span className="text-emerald-400/60">Day 1 sent · Day 3 scheduled · Day 7 scheduled · Day 12 scheduled</span>
+            </div>
+          ) : (
+            <Button onClick={launch} size="lg" className="mt-6 w-full gap-2 shadow-lg shadow-primary/20">
+              <Send size={14} />
+              Launch Sequence
+            </Button>
+          )
         ) : (
-          <Button onClick={launch} size="lg" className="mt-6 w-full gap-2 shadow-lg shadow-primary/20">
-            <Send size={14} />
-            Launch Sequence
-          </Button>
+          <p className="mt-6 text-xs text-muted-foreground">Run full analysis to generate a personalized outreach sequence.</p>
         )}
       </section>
 
@@ -1405,7 +1458,8 @@ function Outreach({
           <Tag tone="blue">{active ? 'Active' : 'Draft'}</Tag>
         </div>
         <div className="space-y-3">
-          {data.emails.map((email, i) => (
+          {ready ? (
+            data.emails.map((email, i) => (
             <div key={email.day} className="overflow-hidden rounded-xl border border-white/[0.06] transition-colors hover:border-white/[0.1]">
               <button
                 onClick={() => setExpanded(expanded === i ? -1 : i)}
@@ -1444,7 +1498,12 @@ function Outreach({
                 </div>
               )}
             </div>
-          ))}
+            ))
+          ) : (
+            <div className="rounded-xl border border-dashed border-white/8 bg-white/2 px-4 py-8 text-center text-xs text-muted-foreground">
+              Outreach emails will appear here after you run full analysis for {prospect.company}.
+            </div>
+          )}
         </div>
       </section>
     </div>

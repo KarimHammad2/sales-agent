@@ -68,7 +68,9 @@ Rules:
 - Label estimates clearly in evidence
 - Provide exactly 4 emails for Day 1, Day 3, Day 7, Day 12
 - Provide 5-7 competitiveMetrics rows
-- competitors array must have exactly 3 real competitor names`
+- competitors array must have exactly 3 real competitor names
+- Every email must mention the target company by name and reference their actual market, services, and location
+- Never use placeholder companies, generic templates, or unrelated industries`
 
 function extractJson(content: string) {
   try {
@@ -95,6 +97,7 @@ function buildPrompt(body: AnalyzeProspectRequest) {
     body.mission ? `Mission: ${body.mission}` : '',
     body.priorities?.length ? `Qualification priorities: ${body.priorities.join(', ')}` : '',
     p.competitors?.length ? `Known competitors: ${p.competitors.join(', ')}` : '',
+    `Write all outreach emails specifically for ${p.company ?? 'this company'}. Do not reference any other company as the prospect.`,
   ]
     .filter(Boolean)
     .join('\n')
