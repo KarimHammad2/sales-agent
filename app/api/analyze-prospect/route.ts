@@ -71,11 +71,15 @@ Rules:
 - competitors array must have exactly 3 real competitor names`
 
 function extractJson(content: string) {
-  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const raw = fenced?.[1]?.trim() ?? content.trim()
-  const match = raw.match(/\{[\s\S]*\}/)
-  if (!match) return null
-  return JSON.parse(match[0])
+  try {
+    const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    const raw = fenced?.[1]?.trim() ?? content.trim()
+    const match = raw.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    return JSON.parse(match[0])
+  } catch {
+    return null
+  }
 }
 
 function buildPrompt(body: AnalyzeProspectRequest) {
@@ -170,8 +174,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ ok: true, provider, result })
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Analysis failed'
-    return NextResponse.json({ ok: false, reason })
+  } catch {
+    return NextResponse.json({ ok: false, reason: 'Analysis failed' })
   }
 }

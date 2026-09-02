@@ -31,6 +31,6 @@ export async function POST(request: Request) {
     try { result = JSON.parse(content) } catch { result = { text: content } }
     return NextResponse.json({ ok: true, provider: 'openai', result })
   } catch {
-    return NextResponse.json({ ok: false, fallback: true, reason: 'Malformed OpenAI response' })
+    return NextResponse.json({ ok: false, fallback: true, reason: 'OpenAI request failed' })
   }
 }
